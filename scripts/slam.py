@@ -1,5 +1,5 @@
 #! /usr/bin/python
-
+from __future__ import division
 from scipy.stats import multivariate_normal as mvn
 import scipy
 import copy
@@ -19,6 +19,12 @@ def wrap(x):
         x -= 2*np.pi
     return x
 
+def mvn_logpdf(pt, mean, cov):
+    P_inv = np.linalg.inv(cov)
+    res = pt - mean
+    ll = -np.log(np.linalg.det(cov)) - np.einsum('i,ij,j',  res, P_inv, res)
+    return ll
+
 class Particle(object):
     def __init__(self, x0, map_params, f, del_f_u, Qu, w, Ts, Q=None):
         self.f = f
@@ -30,7 +36,9 @@ class Particle(object):
         self.t_last_odom = -1.
         self.w = w
 
-        self.num_grid_pts = 5
+        self.num_grid_pts = 4
+        # self.num_grid_pts = 5
+        self.num_grid_pts_theta = 10
 
         self.total_time = 0.
         self.iters = 0.
@@ -76,7 +84,7 @@ class Particle(object):
 
             grid = np.mgrid[x_bar[0] - bounds[0]:x_bar[0] + bounds[0]:2*bounds[0]/self.num_grid_pts, 
                             x_bar[1] - bounds[1]:x_bar[1] + bounds[1]:2*bounds[1]/self.num_grid_pts,
-                            x_bar[2] - bounds[2]:x_bar[2] + bounds[2]:2*bounds[2]/self.num_grid_pts]
+                            x_bar[2] - bounds[2]:x_bar[2] + bounds[2]:2*bounds[2]/self.num_grid_pts_theta]
             gs = grid.shape
             grid_pts = grid.reshape(3, gs[1]*gs[2]*gs[3])
             
@@ -85,14 +93,29 @@ class Particle(object):
             for i, pt in enumerate(grid_pts.T):
                 # print("(pdf) P:\n{}".format(P))
                 # print("P condition:\n{}".format(np.linalg.cond(P)))
-                p_odom = mvn.pdf(pt, mean=x_bar, cov=P)
-                scans = z.shape[1]//2
+                # p_odom = mvn.pdf(pt, mean=x_bar, cov=P)
+                # l_p_odom = mvn.logpdf(pt, mean=x_bar, cov=P)
+                l_p_odom = mvn_logpdf(pt, mean=x_bar, cov=P)
+                scans = z.shape[1]//10
                 idx = np.random.randint(0, z.shape[1], scans)
-                p_scan = self.mapper.match(pt, z[:, idx])
+                l_p_scan = np.log(self.mapper.match(pt, z[:, idx]))
+                # l_p_scan = np.log(self.mapper.match(pt, z))
                 # tau_x[i] = p_scan*p_odom
-                tau_x[i] = scipy.misc.logsumexp([p_scan, p_odom])
+                # tau_x[i] = scipy.misc.logsumexp([p_scan, p_odom])
+                ll = np.array([l_p_scan, l_p_odom])
+                # print(ll)
+                tau_x[i] = np.sum(ll)
+
+
+            m = np.max(tau_x)
+            tau_x = np.exp(tau_x - m)
+            # print(tau_x)
 
             eta = np.sum(tau_x)
+            if eta == 0.:
+                print(tau_x)
+                print(ll)
+                print(m)
             # print("eta:\n{}".format(eta))
             mu = np.sum(grid_pts*tau_x[None, :], axis=1)/eta
             Sigma = np.einsum('ik,jk,k->ij', grid_pts - mu[:, None], grid_pts - mu[:, None], tau_x)/eta
@@ -208,6 +231,7 @@ class FastSLAM(object):
         self.n_eff = 1./np.sum(np.square(self.w))
         print("n_eff: {}".format(self.n_eff))
         if self.n_eff < self.num_particles/2:
+            print(self.w)
             unique = self.lowVarSample(self.w)
             self.w = np.ones(self.num_particles)
             print("unique: {}".format(unique))
@@ -218,7 +242,7 @@ class FastSLAM(object):
         self.total_time += t
         self.iters += 1.
         avg = self.total_time/self.iters
-        print("it: {}, avg: {}".format(t, avg))
+        # print("it: {}, avg: {}".format(t, avg))
         
 
 

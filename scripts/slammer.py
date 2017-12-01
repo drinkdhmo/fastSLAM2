@@ -1,5 +1,5 @@
 #! /usr/bin/env python
-
+from __future__ import division
 import rospy
 import message_filters # ApproximateTimeSynchronizer, Subscriber
 from sensor_msgs.msg import LaserScan
@@ -12,6 +12,7 @@ import cv2
 from slam import FastSLAM
 
 from mapper import Occ_Map
+import time
 
 
 def f(x, u, dt):
@@ -44,7 +45,7 @@ def del_f_u(x, u, dt):
     return B
 
 def Qu(u):
-    alpha = np.array([0.1, 0.01, 0.01, 0.1])
+    alpha = np.array([0.5, 0.1, 0.1, 0.5])
     v = u[0]
     w = u[1]
     return np.array([[alpha[0]*v**2 + alpha[1]*w**2, 0],
@@ -118,9 +119,19 @@ class Slammer(object):
         # cv2.resizeWindow('map', 600,600)
         # initialize publisher
 
+        self.total_time = 0.
+        self.iters = 0.
+
     def update(self, odom_msg, scan_msg):
+        start = time.time()
         self.odom_callback(odom_msg)
         self.scan_callback(scan_msg)
+        # do some timing
+        t = time.time() - start
+        self.total_time += t
+        self.iters += 1.
+        avg = self.total_time/self.iters
+        print("it: {}, avg: {}".format(t, avg))
         # print("Callback")
 
     def odom_callback(self, msg):
@@ -203,6 +214,12 @@ class Slammer(object):
         cv2.line(m, (x[1], x[0]), (arrow[1], arrow[0]), (0., 0., 1.))
         m = cv2.resize(m, (0,0), fx=4, fy=4)
         cv2.imshow("map", m)
+
+        # if len(self.slammer.best.mapper._blurred.shape) == 2:
+        #     b = np.array(1. - self.slammer.best.mapper._blurred, dtype=np.float32)
+        #     b = cv2.resize(b, (0,0), fx=4, fy=4)
+        #     cv2.imshow("blurred", b)
+
         cv2.waitKey(1)
         # publish range and bearings?
 

@@ -1,9 +1,10 @@
 #! /usr/bin/env python
-
+from __future__ import division
 import numpy as np
 import time
 from scipy.ndimage.filters import gaussian_filter
 import cv2
+import scipy
 
 def wrap_each(thetas):
     for i, theta in enumerate(thetas):
@@ -146,7 +147,7 @@ class Occ_Map(object):
         
         self._log_m += self.free_mask*self.l_free + self.occ_mask*self.l_occ
 
-        self._blurred = gaussian_filter(self._log_m, 0.2/self.resolution)
+        self._blurred = gaussian_filter(self.get_map(), 0.2/self.resolution)
 
         # t = time.time() - start
         # self.total_time += t
@@ -158,36 +159,6 @@ class Occ_Map(object):
         return self.match_pts(x, z)
 
     def match_full(self, x, z):
-        thk = wrap_each(thk)
-        rel_grid = self._grid - x[:2, np.newaxis, np.newaxis] - body_off - self.offset[:, None, None]
-#         print(rel_grid.shape)
-        
-        r_grid = np.linalg.norm(rel_grid, axis=0)
-        
-        theta_grid = np.arctan2(rel_grid[1, :, :], rel_grid[0, :, :]) - x[2]
-        # wrap
-        theta_grid[theta_grid < -np.pi] += 2*np.pi
-        theta_grid[theta_grid >  np.pi] -= 2*np.pi
-        
-        # generate an update mask
-        meas_mask = r_grid[:, :, np.newaxis] < z[np.newaxis, np.newaxis, :] - self.alpha/2.
-        
-        max_mask = (r_grid < self.z_max)[:, :, np.newaxis]
-        max_mask = np.tile(max_mask, (1, 1, len(z)))
-#         print("shape: {}".format(max_mask.shape))
-        
-        theta_mask = np.abs(theta_grid[:, :, np.newaxis] - thk[np.newaxis, :]) < self.beta/2.
-
-        
-        free_mask = np.logical_or.reduce(max_mask & theta_mask & meas_mask, axis=-1)
-#         print("shape: {}".format(free_mask.shape))
-        
-        # mask out the measurement range +/- the thickness alpha
-        meas_mask = r_grid[:, :, np.newaxis] < z[np.newaxis, np.newaxis, :] + self.alpha/2.
-        meas_mask = meas_mask & (r_grid[:, :, np.newaxis] > z[np.newaxis, np.newaxis, :] - self.alpha/2.)
-        
-        occ_mask = np.logical_or.reduce(max_mask & theta_mask & meas_mask, axis=-1)
-
         raise("Not Yet Implemented")
 
     def match_pts(self, x, z):
@@ -197,18 +168,20 @@ class Occ_Map(object):
 
         idx = np.array(scan_pts/self.resolution, dtype=np.int)
 
-        log_odds = 0.
+        p = 0.0001
         try:
-            log_odds = np.sum(self._blurred[idx[0,:], idx[1,:]])
+            p = scipy.misc.logsumexp(self._blurred[idx[0,:], idx[1,:]])
         except IndexError:
             pass
         # print("log_odds: {}".format(log_odds))
 
         # m = 1.0 - 1.0/(1.0 + np.exp(self._log_m))
-        # m = 1.0 - 1.0/(1.0 + np.exp(blurred))
+        # m = 1.0 - 1.0/(1.0 + np.exp(self._blurred))
+        # m = self._blurred
         # m = np.array(1. - m, dtype=np.float32)
         # m = cv2.cvtColor(m,cv2.COLOR_GRAY2BGR)
         # m = cv2.resize(m, (0,0), fx=4, fy=4)
         # cv2.imshow("blurred", m)
         # cv2.waitKey(1)
-        return 1.0 - 1.0/(1.0 + np.exp(log_odds))
+        # return 1.0 - 1.0/(1.0 + np.exp(log_odds))
+        return p
