@@ -89,10 +89,10 @@ class Slammer(object):
 
         # self.body_offset = (0.08, -0.075)
         self.body_offset = (0.12, -0.07)
-        self.map_offset = (6., 3.)
+        self.map_offset = (6., 4.)
         self.resolution = 0.1
         self.width = 12.
-        self.height = 6.
+        self.height = 8.
         self.map_params = {'width':self.width,
                            'height':self.height, 
                            'offset':self.map_offset, 
@@ -104,7 +104,7 @@ class Slammer(object):
                            'p_free':0.3,
                            'p_occ':0.75}
 
-        self.num_particles = 10
+        self.num_particles = 6
         self.Ts = 0.0796
         x0 = np.zeros(3)
 
@@ -126,7 +126,7 @@ class Slammer(object):
     def odom_callback(self, msg):
         self.u[0] = msg.twist.twist.linear.x
         self.u[1] = msg.twist.twist.angular.z
-
+        self.u_time = msg.header.stamp.secs + 1.e-9*msg.header.stamp.nsecs
 
 
     # def pose_callback(self, msg):
@@ -187,7 +187,9 @@ class Slammer(object):
         # # self.mapper.update(self.pose, range_meas[::skip], bearing_meas[::skip])
         # self.mapper.update(self.pose, range_meas[idx], bearing_meas[idx])
         z = np.vstack((range_meas[None, :], bearing_meas[None, :]))
-        self.slammer.update(self.u, z)
+        self.slammer.update(self.u, self.u_time, z)
+
+        self.pose = self.slammer.best.x
 
         m = self.slammer.get_map()
         m = np.array(1. - m, dtype=np.float32)

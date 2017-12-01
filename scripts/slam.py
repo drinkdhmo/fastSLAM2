@@ -1,9 +1,11 @@
 #! /usr/bin/python
 
 from scipy.stats import multivariate_normal as mvn
+import scipy
 import copy
 import numpy as np
 from mapper import Occ_Map
+import time
 
 def wrap_each(x):
     for i, y in enumerate(x):
@@ -25,10 +27,13 @@ class Particle(object):
         self.mapper = Occ_Map(**map_params)
         self.x = x0
         self.Ts = Ts
+        self.t_last_odom = -1.
         self.w = w
 
         self.num_grid_pts = 5
 
+        self.total_time = 0.
+        self.iters = 0.
 
     # def predict(self, u, z):
     #     uHat += np.random.multivariate_normal(np.zeros(self.m), self.Qu(u))
@@ -36,8 +41,15 @@ class Particle(object):
     #     if self.Q is not None:
     #         particle.x += np.random.multivariate_normal(np.zeros(self.n), self.Q)
 
-    def update(self, u, z):
+    def update(self, u, u_time, z):
+        # start = time.time()
+
         if np.linalg.norm(u) > 0.0001:
+            if self.t_last_odom == -1.:
+                self.t_last_odom = u_time = self.Ts
+            self.Ts = u_time - self.t_last_odom
+            
+
             x_bar = self.f(self.x, u, self.Ts)
 
             # need to get a "grid" covering "4-sigma" from my odometry proposal distribution
@@ -47,15 +59,15 @@ class Particle(object):
             # measurement covariance projected into the state space ( 6/(B*Qu*B.T)^-1_ii )^.5
             B = self.del_f_u(self.x, u, self.Ts)
             Qu = self.Qu(u)
-            print("u:\n{}".format(u))
-            print("Qu:\n{}".format(Qu))
-            print("B:\n{}".format(B))
+            # print("u:\n{}".format(u))
+            # print("Qu:\n{}".format(Qu))
+            # print("B:\n{}".format(B))
 
             P = B.dot(Qu).dot(B.T) + 0.00000001*np.eye(3)
-            print("P:\n{}".format(P))
+            # print("P:\n{}".format(P))
             P_inv = np.linalg.inv(P)
             bounds = 4./np.sqrt(np.diag(P_inv))
-            print("Bounds: {}".format(bounds))
+            # print("Bounds: {}".format(bounds))
 
             # throw down a grid around the local region to do some approximating and itegrating
             # x_idx = np.linspace(x_bar[0] - bounds[0], x_bar[0] + bounds[0], self.num_grid_pts)
@@ -68,28 +80,47 @@ class Particle(object):
             gs = grid.shape
             grid_pts = grid.reshape(3, gs[1]*gs[2]*gs[3])
             
-            tau_x = np.zeros(self.num_grid_pts**3)
+            tau_x = np.zeros(grid_pts.shape[-1])
 
             for i, pt in enumerate(grid_pts.T):
-                print("(pdf) P:\n{}".format(P))
-                print("P condition:\n{}".format(np.linalg.cond(P)))
+                # print("(pdf) P:\n{}".format(P))
+                # print("P condition:\n{}".format(np.linalg.cond(P)))
                 p_odom = mvn.pdf(pt, mean=x_bar, cov=P)
-                p_scan = self.mapper.match(pt, z)
-                tau_x[i] = p_scan*p_odom
+                scans = z.shape[1]//2
+                idx = np.random.randint(0, z.shape[1], scans)
+                p_scan = self.mapper.match(pt, z[:, idx])
+                # tau_x[i] = p_scan*p_odom
+                tau_x[i] = scipy.misc.logsumexp([p_scan, p_odom])
 
             eta = np.sum(tau_x)
-            mu = np.sum(grid_pts*tau_x[:, None], axis=0)/eta
-            Sigma = np.einsum('ki,kj,k->ij', grid_pts - mu[None, :], grid_pts - mu[None, :], tau_x)/eta
+            # print("eta:\n{}".format(eta))
+            mu = np.sum(grid_pts*tau_x[None, :], axis=1)/eta
+            Sigma = np.einsum('ik,jk,k->ij', grid_pts - mu[:, None], grid_pts - mu[:, None], tau_x)/eta
 
-            self.x = np.random.randn(mu, Sigma)
+            # print("x_bar:\n{}".format(x_bar))
+            # print("mu:\n{}".format(mu))
+            # print("Sigma:\n{}".format(Sigma))
+
+            self.x = np.random.multivariate_normal(mu, Sigma)
+            # print("x:\n{}".format(self.x))
 
             self.w = eta # self.mapper.match(self.x, z)
 
-
+        # start = time.time()
 
         scans = 15
         idx = np.random.randint(0, z.shape[1], scans)
         self.mapper.update(self.x, z[:, idx])
+
+
+        # do some timing
+        # t = time.time() - start
+        # self.total_time += t
+        # self.iters += 1.
+        # avg = self.total_time/self.iters
+        # print("particle it: {}, avg: {}".format(t, avg))
+
+        self.t_last_odom = u_time
 
         return self.w
 
@@ -118,6 +149,9 @@ class FastSLAM(object):
             self.X.append(Particle(x0, map_params, f, del_f_u, Qu, self.w[i], Ts))
         self.best = self.X[0]
         self.Ts = Ts
+
+        self.total_time = 0.
+        self.iters = 0.
         
     def lowVarSample(self, w):
         Xbar = []
@@ -157,11 +191,11 @@ class FastSLAM(object):
 # #         print(self.x)
         
         
-    def update(self, u, z):
-
+    def update(self, u, u_time, z):
+        start = time.time()
         
         for i, x in enumerate(self.X):
-            self.w[i] = self.w[i]*x.update(u, z)
+            self.w[i] = self.w[i]*x.update(u, u_time, z)
 #             print(w)
 
         # for code simplicity, normalize the weights here
@@ -172,11 +206,21 @@ class FastSLAM(object):
 #         print("w: {}".format(w))
         
         self.n_eff = 1./np.sum(np.square(self.w))
+        print("n_eff: {}".format(self.n_eff))
         if self.n_eff < self.num_particles/2:
             unique = self.lowVarSample(self.w)
             self.w = np.ones(self.num_particles)
-            print(unique)
+            print("unique: {}".format(unique))
 
+
+        # do some timing
+        t = time.time() - start
+        self.total_time += t
+        self.iters += 1.
+        avg = self.total_time/self.iters
+        print("it: {}, avg: {}".format(t, avg))
         
+
+
     def get_map(self):
         return self.best.get_map()

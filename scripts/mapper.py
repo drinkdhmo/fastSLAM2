@@ -3,6 +3,7 @@
 import numpy as np
 import time
 from scipy.ndimage.filters import gaussian_filter
+import cv2
 
 def wrap_each(thetas):
     for i, theta in enumerate(thetas):
@@ -62,6 +63,7 @@ class Occ_Map(object):
         self.l_occ = np.log(p_occ/(1 - p_occ))
 #         self._m = np.zeros(m_width + 1, m_height + 1) + 0.5
         self._log_m = np.zeros((m_width + 1, m_height + 1))
+        self._blurred = np.zeros_like(self._log_m)
         self._grid = np.mgrid[0:width + resolution:resolution, 0:height + resolution:resolution]
         self.body_offset = np.array(body_offset)
         self.map_offset = np.array(offset)
@@ -77,7 +79,7 @@ class Occ_Map(object):
     
     def update(self, x, z):
 
-        start = time.time()
+        # start = time.time()
 
         thk = z[1, :]
         thk = wrap_each(thk)
@@ -144,14 +146,16 @@ class Occ_Map(object):
         
         self._log_m += self.free_mask*self.l_free + self.occ_mask*self.l_occ
 
-        t = time.time() - start
-        self.total_time += t
-        self.iters += 1.
-        avg = self.total_time/self.iters
-        print("it: {}, avg: {}".format(t, avg))
+        self._blurred = gaussian_filter(self._log_m, 0.2/self.resolution)
+
+        # t = time.time() - start
+        # self.total_time += t
+        # self.iters += 1.
+        # avg = self.total_time/self.iters
+        # print("it: {}, avg: {}".format(t, avg))
 
     def match(self, x, z):
-        self.match_pts(x, z)
+        return self.match_pts(x, z)
 
     def match_full(self, x, z):
         thk = wrap_each(thk)
@@ -187,12 +191,24 @@ class Occ_Map(object):
         raise("Not Yet Implemented")
 
     def match_pts(self, x, z):
-        blurred = gaussian_filter(self._log_m, 0.1/self.resolution)
+        # blurred = gaussian_filter(self._log_m, 0.2/self.resolution)
 
         scan_pts = x[:2, None] + z[0:1,:]*np.array([np.cos(z[1,:] + x[2]), np.sin(z[1,:] + x[2])]) + self.map_offset[:, None]
 
         idx = np.array(scan_pts/self.resolution, dtype=np.int)
 
-        log_odds = np.sum(blurred[idx[0,:], idx[1,:]])
-        print("log_odds: {}".format(log_odds))
+        log_odds = 0.
+        try:
+            log_odds = np.sum(self._blurred[idx[0,:], idx[1,:]])
+        except IndexError:
+            pass
+        # print("log_odds: {}".format(log_odds))
+
+        # m = 1.0 - 1.0/(1.0 + np.exp(self._log_m))
+        # m = 1.0 - 1.0/(1.0 + np.exp(blurred))
+        # m = np.array(1. - m, dtype=np.float32)
+        # m = cv2.cvtColor(m,cv2.COLOR_GRAY2BGR)
+        # m = cv2.resize(m, (0,0), fx=4, fy=4)
+        # cv2.imshow("blurred", m)
+        # cv2.waitKey(1)
         return 1.0 - 1.0/(1.0 + np.exp(log_odds))
