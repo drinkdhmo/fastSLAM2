@@ -75,11 +75,15 @@ class Occ_Map(object):
     def get_map(self):
         return 1.0 - 1.0/(1.0 + np.exp(self._log_m))
     
-    def update(self, x, z, thk):
+    def update(self, x, z):
 
         start = time.time()
 
+        thk = z[1, :]
         thk = wrap_each(thk)
+
+        z = z[0, :]
+
         body_off = np.array([[np.cos(x[2]), -np.sin(x[2])],[np.sin(x[2]), np.cos(x[2])]]).dot(self.body_offset[:, None])
         # print(body_off)
         rel_grid = self._grid - x[:2, None, None] - body_off[:, 0, None, None] - self.map_offset[:, None, None]
@@ -185,8 +189,10 @@ class Occ_Map(object):
     def match_pts(self, x, z):
         blurred = gaussian_filter(self._log_m, 0.1/self.resolution)
 
-        scan_pts = x[:2, None] + z[0,:]*np.array([[np.cos(z[1,:] + x[2])], [np.sin(z[1,:] + x[2])]]) - self.map_offset[:, None]
+        scan_pts = x[:2, None] + z[0:1,:]*np.array([np.cos(z[1,:] + x[2]), np.sin(z[1,:] + x[2])]) + self.map_offset[:, None]
 
-        log_odds = np.sum(blurred[scan_pts[0,:], scan_pts[1,:]])
+        idx = np.array(scan_pts/self.resolution, dtype=np.int)
 
+        log_odds = np.sum(blurred[idx[0,:], idx[1,:]])
+        print("log_odds: {}".format(log_odds))
         return 1.0 - 1.0/(1.0 + np.exp(log_odds))

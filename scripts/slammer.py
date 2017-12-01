@@ -4,15 +4,54 @@ import rospy
 import message_filters # ApproximateTimeSynchronizer, Subscriber
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
 import tf
 import math
 import numpy as np
 import cv2
+from slam import FastSLAM
 
 from mapper import Occ_Map
 
 
-class ScanToRangeBearing(object):
+def f(x, u, dt):
+    v = u[0]
+    w = u[1]
+    if np.abs(w) < 10*np.finfo(np.float32).eps:
+        w = 10*np.finfo(np.float32).eps
+
+    theta = x[2]
+    dx = np.array([-v/w*np.sin(theta) + v/w*np.sin(theta + w*dt),
+                         v/w*np.cos(theta) - v/w*np.cos(theta + w*dt),
+                         w*dt])
+    x_next = x + dx
+    #print(x_next)
+    return x_next
+
+def del_f_u(x, u, dt):
+    v = u.flatten()[0]
+    w = u.flatten()[1]
+    theta = x.flatten()[2]
+
+    if np.abs(w) < 10*np.finfo(np.float32).eps:
+        w = 10*np.finfo(np.float32).eps
+
+    B = np.array([[1/w*(-np.sin(theta) + np.sin(theta + w*dt)), 
+                       v/w*(1/w*(np.sin(theta) - np.sin(theta + w*dt)) + np.cos(theta + w*dt)*dt)],
+                  [1/w*(np.cos(theta) - np.cos(theta + w*dt)), 
+                       v/w*(-1/w*(np.cos(theta) - np.cos(theta + w*dt)) + np.sin(theta + w*dt)*dt)],
+                  [0, dt]])
+    return B
+
+def Qu(u):
+    alpha = np.array([0.1, 0.01, 0.01, 0.1])
+    v = u[0]
+    w = u[1]
+    return np.array([[alpha[0]*v**2 + alpha[1]*w**2, 0],
+                     [0, alpha[2]*v**2 + alpha[3]*w**2]])
+
+
+class Slammer(object):
 
     def __init__(self):
 
@@ -30,6 +69,9 @@ class ScanToRangeBearing(object):
         self.pose = np.zeros(3)
         self.pose_valid = False
 
+        # velocity inputs [v, w]
+        self.u = np.zeros(2)
+
         # initialize bearings array
         self.bearings = np.zeros(360)
 
@@ -39,16 +81,17 @@ class ScanToRangeBearing(object):
         # self.scan_sub = rospy.Subscriber("/scan", LaserScan, self.scan_callback)
         # self.pose_sub = rospy.Subscriber("/nwu_turtlebot_pose", PoseStamped, self.pose_callback)
 
-        self.pose_sub = message_filters.Subscriber("/nwu_turtlebot_pose", PoseStamped)
+        # self.pose_sub = message_filters.Subscriber("/nwu_turtlebot_pose", PoseStamped)
         self.scan_sub = message_filters.Subscriber("/scan", LaserScan)
-        ats = message_filters.ApproximateTimeSynchronizer([self.pose_sub, self.scan_sub], queue_size=15, slop=0.01)
+        self.odom_sub = message_filters.Subscriber("/odom", Odometry)
+        ats = message_filters.ApproximateTimeSynchronizer([self.odom_sub, self.scan_sub], queue_size=15, slop=0.06)
         ats.registerCallback(self.update)
 
         # self.body_offset = (0.08, -0.075)
         self.body_offset = (0.12, -0.07)
-        self.map_offset = (5., 3.)
+        self.map_offset = (6., 3.)
         self.resolution = 0.1
-        self.width = 10.
+        self.width = 12.
         self.height = 6.
         self.map_params = {'width':self.width,
                            'height':self.height, 
@@ -60,7 +103,12 @@ class ScanToRangeBearing(object):
                            'beta':1.5*np.pi/180, 
                            'p_free':0.3,
                            'p_occ':0.75}
-        self.mapper = Occ_Map(**self.map_params)
+
+        self.num_particles = 10
+        self.Ts = 0.0796
+        x0 = np.zeros(3)
+
+        self.slammer = FastSLAM(x0, self.num_particles, self.map_params, f, del_f_u, Qu, self.Ts)
         # self.mapper = Occ_Map(width=self.width, height=self.height, offset=self.map_offset, 
         #                       body_offset=self.body_offset, resolution=self.resolution, 
         #                       z_max = 150, alpha=2*self.resolution, beta=1.5*np.pi/180, 
@@ -70,28 +118,33 @@ class ScanToRangeBearing(object):
         # cv2.resizeWindow('map', 600,600)
         # initialize publisher
 
-    def update(self, pose_msg, scan_msg):
-        self.pose_callback(pose_msg)
+    def update(self, odom_msg, scan_msg):
+        self.odom_callback(odom_msg)
         self.scan_callback(scan_msg)
         # print("Callback")
 
-
-    def pose_callback(self, msg):
-        self.pose[0] = msg.pose.position.x
-        self.pose[1] = msg.pose.position.y
-
-        q = np.zeros(4)
-        q[0] = msg.pose.orientation.x
-        q[1] = msg.pose.orientation.y
-        q[2] = msg.pose.orientation.z
-        q[3] = msg.pose.orientation.w
+    def odom_callback(self, msg):
+        self.u[0] = msg.twist.twist.linear.x
+        self.u[1] = msg.twist.twist.angular.z
 
 
-        euler = tf.transformations.euler_from_quaternion(q)
 
-        self.pose[2] = euler[2]
-        self.pose_valid = True
-        # print(self.pose)
+    # def pose_callback(self, msg):
+    #     self.pose[0] = msg.pose.position.x
+    #     self.pose[1] = msg.pose.position.y
+
+    #     q = np.zeros(4)
+    #     q[0] = msg.pose.orientation.x
+    #     q[1] = msg.pose.orientation.y
+    #     q[2] = msg.pose.orientation.z
+    #     q[3] = msg.pose.orientation.w
+
+
+    #     euler = tf.transformations.euler_from_quaternion(q)
+
+    #     self.pose[2] = euler[2]
+    #     self.pose_valid = True
+    #     # print(self.pose)
 
     def scan_callback(self, msg):
 
@@ -129,13 +182,15 @@ class ScanToRangeBearing(object):
 
         # print(max(range_meas))
         # skip = 10
-        scans = 15
-        idx = np.random.randint(0, len(range_meas), scans)
-        # self.mapper.update(self.pose, range_meas[::skip], bearing_meas[::skip])
-        self.mapper.update(self.pose, range_meas[idx], bearing_meas[idx])
+        # scans = 15
+        # idx = np.random.randint(0, len(range_meas), scans)
+        # # self.mapper.update(self.pose, range_meas[::skip], bearing_meas[::skip])
+        # self.mapper.update(self.pose, range_meas[idx], bearing_meas[idx])
+        z = np.vstack((range_meas[None, :], bearing_meas[None, :]))
+        self.slammer.update(self.u, z)
 
-        # m = self.mapper.get_map()
-        m = np.array(1. - self.mapper.get_map(), dtype=np.float32)
+        m = self.slammer.get_map()
+        m = np.array(1. - m, dtype=np.float32)
         m = cv2.cvtColor(m,cv2.COLOR_GRAY2BGR)
         x = np.array(self.pose[:2], dtype=np.int32)
         x[0] = int((self.pose[0] + self.map_offset[0])/self.resolution)
@@ -144,7 +199,7 @@ class ScanToRangeBearing(object):
         arrow[0] += int(5*np.cos(self.pose[2]))
         arrow[1] += int(5*np.sin(self.pose[2]))
         cv2.line(m, (x[1], x[0]), (arrow[1], arrow[0]), (0., 0., 1.))
-        m = cv2.resize(m, (0,0), fx=10, fy=10)
+        m = cv2.resize(m, (0,0), fx=4, fy=4)
         cv2.imshow("map", m)
         cv2.waitKey(1)
         # publish range and bearings?
@@ -152,10 +207,10 @@ class ScanToRangeBearing(object):
 
 def main():
     # initialize a node
-    rospy.init_node('range_bearing_pub')
-    print("Initializing mapping node.")
+    rospy.init_node('slammer')
+    print("Initializing slamming node.")
     # create instance of ScanToRangeBearing class
-    translator = ScanToRangeBearing()
+    slammer = Slammer()
 
     # spin
     try:
