@@ -65,7 +65,8 @@ class Slammer(object):
 
         self.count = 0
 
-        self.laser_offset = 1.03*np.pi
+        self.laser_offset = 0.
+        # self.laser_offset = 1.03*np.print  # rplidar
 
         self.pose = np.zeros(3)
         self.pose_valid = False
@@ -90,10 +91,10 @@ class Slammer(object):
 
         # self.body_offset = (0.08, -0.075)
         self.body_offset = (0.12, -0.07)
-        self.map_offset = (6., 4.)
-        self.resolution = 0.1
-        self.width = 12.
-        self.height = 8.
+        self.map_offset = (6., 8.)
+        self.resolution = 0.2
+        self.width = 30.
+        self.height = 16.
         self.map_params = {'width':self.width,
                            'height':self.height, 
                            'offset':self.map_offset, 
@@ -105,9 +106,11 @@ class Slammer(object):
                            'p_free':0.3,
                            'p_occ':0.75}
 
-        self.num_particles = 6
+        self.num_particles = 8
+        self.omega_bias = 1.
         self.Ts = 0.0796
         x0 = np.zeros(3)
+        x0[2] = -65.*np.pi/180.
 
         self.slammer = FastSLAM(x0, self.num_particles, self.map_params, f, del_f_u, Qu, self.Ts)
         # self.mapper = Occ_Map(width=self.width, height=self.height, offset=self.map_offset, 
@@ -136,7 +139,7 @@ class Slammer(object):
 
     def odom_callback(self, msg):
         self.u[0] = msg.twist.twist.linear.x
-        self.u[1] = msg.twist.twist.angular.z
+        self.u[1] = self.omega_bias*msg.twist.twist.angular.z
         self.u_time = msg.header.stamp.secs + 1.e-9*msg.header.stamp.nsecs
 
 

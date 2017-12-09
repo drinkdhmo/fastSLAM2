@@ -38,7 +38,7 @@ class Particle(object):
 
         self.num_grid_pts = 4
         # self.num_grid_pts = 5
-        self.num_grid_pts_theta = 10
+        self.num_grid_pts_theta = 6
 
         self.total_time = 0.
         self.iters = 0.
@@ -96,9 +96,11 @@ class Particle(object):
                 # p_odom = mvn.pdf(pt, mean=x_bar, cov=P)
                 # l_p_odom = mvn.logpdf(pt, mean=x_bar, cov=P)
                 l_p_odom = mvn_logpdf(pt, mean=x_bar, cov=P)
-                scans = z.shape[1]//10
+                # print("l_p_odom: {}".format(l_p_odom))
+                scans = 15 # z.shape[1]//10
                 idx = np.random.randint(0, z.shape[1], scans)
-                l_p_scan = np.log(self.mapper.match(pt, z[:, idx]))
+                l_p_scan = 50.*np.log(self.mapper.match(pt, z[:, idx]))
+                # print("l_p_scan: {}".format(l_p_scan))
                 # l_p_scan = np.log(self.mapper.match(pt, z))
                 # tau_x[i] = p_scan*p_odom
                 # tau_x[i] = scipy.misc.logsumexp([p_scan, p_odom])
